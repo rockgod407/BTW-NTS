@@ -19,3 +19,7 @@ env/
 .vscode/
 nettest-report.*
 /config.yaml
+*.pdf
+*.rtf
+.claude/
+.nettest/
