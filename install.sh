@@ -53,7 +53,7 @@ echo -e "  pip:     ${GREEN}${PIP_VERSION}${RESET}"
 # ── Step 3: Install nettest ────────────────────────────────────
 echo ""
 echo -e "${BOLD}Installing nettest...${RESET}"
-"$PYTHON" -m pip install --user "git+${REPO}" 2>&1 | tail -5
+"$PYTHON" -m pip install --user --force-reinstall --no-cache-dir "git+${REPO}" 2>&1 | tail -5
 
 # ── Step 4: Ensure PATH includes Python user bin ───────────────
 USER_BIN=$("$PYTHON" -c "import site; print(site.getusersitepackages().replace('/lib/python/site-packages', '/bin').replace('lib/python${PY_VERSION}/site-packages', 'bin'))")
@@ -111,7 +111,7 @@ else
     echo -e "${RED}Something went wrong — nettest binary not found at ${USER_BIN}/nettest${RESET}"
     echo ""
     echo "Try running manually:"
-    echo "  $PYTHON -m pip install --user git+${REPO}"
+    echo "  $PYTHON -m pip install --user --force-reinstall --no-cache-dir git+${REPO}"
     echo ""
     echo "Or run directly with:"
     echo "  $PYTHON -m nettest.cli doctor"
