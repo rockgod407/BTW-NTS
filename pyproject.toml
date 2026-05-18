@@ -16,12 +16,12 @@ dependencies = [
     "pyyaml>=6.0",
     "pytest>=7.4",
     "scapy>=2.5",
+    "sacn>=1.9",
 ]
 
 [project.optional-dependencies]
-sacn = ["sacn>=1.9"]
 ndi = ["ndi-python>=5.0"]
-all-av = ["sacn>=1.9", "ndi-python>=5.0"]
+all-av = ["ndi-python>=5.0"]
 
 [project.scripts]
 nettest = "nettest.cli:main"

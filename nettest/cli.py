@@ -89,7 +89,12 @@ def main(ctx, config_path, categories, verbose, quick, output_path):
         nettest av-discover                # Discover all AV devices
     """
     if ctx.invoked_subcommand is not None:
+        # First-run check (runs once, before any subcommand)
+        _maybe_first_run_check()
         return
+
+    # First-run check
+    _maybe_first_run_check()
 
     try:
         config = load_config(config_path)
@@ -131,6 +136,237 @@ def _export_report(suite, output_path: str) -> None:
         path = export_json(suite, output_path)
 
     console.print(f"\n[bold green]Report saved:[/] {path}")
+
+
+# ---------------------------------------------------------------------------
+# First-run dependency check
+# ---------------------------------------------------------------------------
+
+def _maybe_first_run_check():
+    """On first run, do a quick dependency check and warn about problems."""
+    from nettest.utils.doctor import needs_doctor, quick_check, mark_doctor_passed
+
+    if not needs_doctor():
+        return
+
+    all_ok, problems = quick_check()
+
+    if all_ok:
+        mark_doctor_passed()
+        return
+
+    console.print("\n[bold yellow]First-run dependency check[/]\n")
+    console.print("[yellow]Some required dependencies are missing:[/]")
+    for p in problems:
+        console.print(f"[red]{p}[/]")
+    console.print()
+    console.print("[dim]Run [bold]nettest doctor[/bold] for a full diagnostic and auto-install.[/]")
+    console.print("[dim]Run [bold]nettest doctor --fix[/bold] to auto-install everything possible.[/]\n")
+
+
+# ---------------------------------------------------------------------------
+# Doctor command
+# ---------------------------------------------------------------------------
+
+@main.command("doctor")
+@click.option("--fix", is_flag=True, default=False, help="Auto-install missing pip dependencies")
+@click.option("--json-out", is_flag=True, default=False, help="Output as JSON")
+def doctor(fix, json_out):
+    """
+    Check that all dependencies are installed and working.
+
+    Verifies core dependencies, optional AV protocol libraries,
+    and useful system tools. Use --fix to auto-install anything
+    that's missing.
+
+    \b
+    Examples:
+        nettest doctor          # Check everything
+        nettest doctor --fix    # Check and auto-install missing deps
+        nettest doctor --json-out  # Machine-readable output
+    """
+    from nettest.utils.doctor import (
+        DepStatus, check_all, check_system_tools,
+        install_missing, mark_doctor_passed,
+    )
+
+    results = check_all()
+    sys_tools = check_system_tools()
+
+    if json_out:
+        import json
+        data = {
+            "dependencies": [
+                {
+                    "name": r.name,
+                    "required": r.required,
+                    "status": r.status.value,
+                    "installed_version": r.installed_version,
+                    "min_version": r.min_version,
+                    "notes": r.notes,
+                }
+                for r in results
+            ],
+            "system_tools": sys_tools,
+        }
+        console.print(json.dumps(data, indent=2))
+        return
+
+    # Pretty output
+    from nettest.utils.output import print_header
+    print_header("nettest dependency check")
+
+    # --- Python info ---
+    import platform
+    console.print(f"  [bold]Python:[/] {platform.python_version()} ({sys.executable})")
+    console.print(f"  [bold]Platform:[/] {platform.platform()}")
+    console.print()
+
+    # --- Core dependencies ---
+    table = Table(
+        title="[bold cyan]Core Dependencies[/]",
+        box=box.ROUNDED, show_header=True, header_style="bold",
+    )
+    table.add_column("Package", style="cyan", min_width=12)
+    table.add_column("Status", min_width=10)
+    table.add_column("Installed", justify="right", min_width=10)
+    table.add_column("Required", justify="right", min_width=10)
+    table.add_column("Description", max_width=40)
+
+    core_ok = True
+    for r in results:
+        if not r.required:
+            continue
+        if r.status == DepStatus.OK:
+            status_str = "[green]OK[/]"
+        elif r.status == DepStatus.MISSING:
+            status_str = "[bold red]MISSING[/]"
+            core_ok = False
+        elif r.status == DepStatus.VERSION_LOW:
+            status_str = "[yellow]OUTDATED[/]"
+            core_ok = False
+        else:
+            status_str = "[red]BROKEN[/]"
+            core_ok = False
+
+        table.add_row(
+            r.name,
+            status_str,
+            r.installed_version or "—",
+            f">={r.min_version}" if r.min_version else "",
+            r.notes,
+        )
+    console.print(table)
+    console.print()
+
+    # --- Optional dependencies ---
+    opt_table = Table(
+        title="[bold cyan]Optional AV Dependencies[/]",
+        box=box.ROUNDED, show_header=True, header_style="bold",
+    )
+    opt_table.add_column("Package", style="cyan", min_width=14)
+    opt_table.add_column("Status", min_width=10)
+    opt_table.add_column("Installed", justify="right", min_width=10)
+    opt_table.add_column("Description", max_width=50)
+
+    for r in results:
+        if r.required:
+            continue
+        if r.status == DepStatus.OK:
+            status_str = "[green]OK[/]"
+        elif r.status == DepStatus.MISSING:
+            status_str = "[dim yellow]NOT INSTALLED[/]"
+        elif r.status == DepStatus.VERSION_LOW:
+            status_str = "[yellow]OUTDATED[/]"
+        else:
+            status_str = "[red]BROKEN[/]"
+
+        opt_table.add_row(
+            r.name,
+            status_str,
+            r.installed_version or "—",
+            r.notes,
+        )
+    console.print(opt_table)
+    console.print()
+
+    # --- System tools ---
+    tools_table = Table(
+        title="[bold cyan]System Tools[/]",
+        box=box.ROUNDED, show_header=True, header_style="bold",
+    )
+    tools_table.add_column("Tool", style="cyan")
+    tools_table.add_column("Status", min_width=10)
+    tools_table.add_column("Path", style="dim", max_width=50)
+    tools_table.add_column("Used For")
+
+    for t in sys_tools:
+        status_str = "[green]OK[/]" if t["installed"] else "[dim yellow]NOT FOUND[/]"
+        tools_table.add_row(t["name"], status_str, t["path"], t["description"])
+    console.print(tools_table)
+    console.print()
+
+    # --- Install hints for missing deps ---
+    missing = [r for r in results if r.status in (DepStatus.MISSING, DepStatus.VERSION_LOW)]
+    missing_required = [r for r in missing if r.required]
+    missing_optional = [r for r in missing if not r.required]
+
+    if fix and missing:
+        console.print("[bold]Auto-installing missing dependencies...[/]\n")
+        install_results = install_missing(results)
+        for name, success, msg in install_results:
+            if success:
+                console.print(f"  [green]✔[/] {name}: {msg}")
+            else:
+                console.print(f"  [red]✘[/] {name}: {msg}")
+
+        # Show manual install hints for optional deps
+        if missing_optional:
+            console.print()
+            console.print("[bold]Optional dependencies (manual install):[/]")
+            for r in missing_optional:
+                console.print(f"\n  [cyan]{r.name}[/] — {r.notes}")
+                console.print(f"    [dim]{r.install_hint}[/]")
+
+        # Re-check
+        console.print("\n[dim]Re-checking...[/]\n")
+        recheck = check_all()
+        still_missing = [r for r in recheck if r.required and r.status != DepStatus.OK]
+        if not still_missing:
+            mark_doctor_passed()
+            console.print("[bold green]All core dependencies are now installed![/]\n")
+        else:
+            console.print("[bold red]Some core dependencies are still missing.[/]")
+            for r in still_missing:
+                console.print(f"  [red]{r.name}[/]: {r.install_hint}")
+            console.print()
+
+    elif missing_required:
+        console.print("[bold red]Missing required dependencies![/]")
+        console.print("[dim]Run [bold]nettest doctor --fix[/bold] to auto-install, or manually:[/]\n")
+        for r in missing_required:
+            console.print(f"  [cyan]{r.name}[/]: {r.install_hint}")
+        console.print()
+
+        if missing_optional:
+            console.print("[bold yellow]Optional (for AV protocol testing):[/]")
+            for r in missing_optional:
+                console.print(f"\n  [cyan]{r.name}[/] — {r.notes}")
+                console.print(f"    [dim]{r.install_hint}[/]")
+            console.print()
+
+    elif missing_optional:
+        console.print("[bold green]All core dependencies OK![/]\n")
+        console.print("[bold yellow]Optional (for AV protocol testing):[/]")
+        for r in missing_optional:
+            console.print(f"\n  [cyan]{r.name}[/] — {r.notes}")
+            console.print(f"    [dim]{r.install_hint}[/]")
+        console.print()
+        mark_doctor_passed()
+
+    else:
+        mark_doctor_passed()
+        console.print("[bold green]Everything looks good! All dependencies installed.[/]\n")
 
 
 # ---------------------------------------------------------------------------
