@@ -165,11 +165,11 @@ def _maybe_first_run_check():
 
 
 # ---------------------------------------------------------------------------
-# Update check (daily, cached)
+# Update check (on every run)
 # ---------------------------------------------------------------------------
 
 def _maybe_update_check():
-    """Check for updates once per day, prompt the user if one is available."""
+    """Check for updates, prompt the user if one is available."""
     try:
         from nettest.utils.updater import check_for_update, run_update
 
@@ -187,7 +187,7 @@ def _maybe_update_check():
             return
 
         if response in ("", "y", "yes"):
-            console.print("[dim]Updating...[/]")
+            console.print("[dim]Downloading update from GitHub...[/]")
             success, message = run_update()
             if success:
                 console.print(f"[bold green]{message}[/]\n")
@@ -216,6 +216,7 @@ def update(check_only, force, verbose):
     Check for and install updates.
 
     Checks GitHub for a newer version and offers to install it.
+    Downloads the repo as a zip — no git or caching involved.
 
     \b
     Examples:
@@ -223,11 +224,10 @@ def update(check_only, force, verbose):
         nettest update --check   # Just check, don't install
         nettest update --force   # Force reinstall from GitHub
     """
-    from nettest.utils.updater import check_for_update, run_update, clear_cache
+    from nettest.utils.updater import check_for_update, run_update
 
-    clear_cache()  # Force a fresh check
-    console.print("[dim]Checking for updates...[/]")
-    update_available, local_ver, remote_ver = check_for_update(force=True)
+    console.print("[dim]Checking GitHub for latest version...[/]")
+    update_available, local_ver, remote_ver = check_for_update()
 
     console.print(f"  Installed: [bold]{local_ver}[/]")
     console.print(f"  Latest:    [bold]{remote_ver}[/]")
@@ -258,7 +258,7 @@ def update(check_only, force, verbose):
             console.print("[dim]Update cancelled.[/]\n")
             return
 
-    console.print("\n[dim]Downloading and installing from GitHub...[/]\n")
+    console.print("\n[dim]Downloading zip from GitHub and installing...[/]\n")
     success, message = run_update(verbose=verbose)
     if success:
         console.print(f"[bold green]{message}[/]\n")

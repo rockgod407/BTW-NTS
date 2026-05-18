@@ -2,6 +2,9 @@
 # ──────────────────────────────────────────────────────────────
 # nettest installer — run this on any Mac to install everything
 #
+# Downloads the repo as a zip (no git required), installs via pip
+# from the local files. No caching, always gets the latest.
+#
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/rockgod407/BTW-NTS/main/install.sh | bash
 #   — OR —
@@ -10,7 +13,7 @@
 
 set -e
 
-REPO="https://github.com/rockgod407/BTW-NTS.git"
+ZIP_URL="https://github.com/rockgod407/BTW-NTS/archive/refs/heads/main.zip"
 BOLD="\033[1m"
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -50,14 +53,29 @@ echo -e "${YELLOW}  (pip upgrade skipped — continuing with current version)${R
 PIP_VERSION=$("$PYTHON" -m pip --version 2>/dev/null | head -1)
 echo -e "  pip:     ${GREEN}${PIP_VERSION}${RESET}"
 
-# ── Step 3: Install nettest ────────────────────────────────────
+# ── Step 3: Download and install nettest ──────────────────────
 echo ""
+echo -e "${BOLD}Downloading nettest...${RESET}"
+
+TMP_DIR=$(mktemp -d)
+trap "rm -rf $TMP_DIR" EXIT
+
+curl -fsSL "$ZIP_URL" -o "$TMP_DIR/repo.zip"
+unzip -q "$TMP_DIR/repo.zip" -d "$TMP_DIR"
+
+REPO_DIR="$TMP_DIR/BTW-NTS-main"
+if [ ! -d "$REPO_DIR" ]; then
+    echo -e "${RED}Error: Failed to extract repo.${RESET}"
+    exit 1
+fi
+
 echo -e "${BOLD}Installing nettest...${RESET}"
-"$PYTHON" -m pip install --user --force-reinstall --no-cache-dir "git+${REPO}" 2>&1 | tail -5
+"$PYTHON" -m pip install --user --force-reinstall --no-cache-dir "$REPO_DIR" 2>&1 | tail -5
+
+# Clean up any old update cache
+rm -f "$HOME/.nettest/.update_check" 2>/dev/null
 
 # ── Step 4: Ensure PATH includes Python user bin ───────────────
-USER_BIN=$("$PYTHON" -c "import site; print(site.getusersitepackages().replace('/lib/python/site-packages', '/bin').replace('lib/python${PY_VERSION}/site-packages', 'bin'))")
-# More reliable: ask Python directly
 USER_BIN=$("$PYTHON" -c "
 import sysconfig
 print(sysconfig.get_path('scripts', scheme='posix_user') if hasattr(sysconfig, 'get_path') else '')
@@ -72,6 +90,7 @@ echo ""
 
 # Check if nettest is already findable
 if command -v nettest &>/dev/null; then
+    INSTALLED_VER=$(nettest --help 2>/dev/null | head -1 || echo "")
     echo -e "${GREEN}${BOLD}nettest is ready!${RESET}"
     echo ""
     nettest doctor 2>/dev/null || true
@@ -111,7 +130,7 @@ else
     echo -e "${RED}Something went wrong — nettest binary not found at ${USER_BIN}/nettest${RESET}"
     echo ""
     echo "Try running manually:"
-    echo "  $PYTHON -m pip install --user --force-reinstall --no-cache-dir git+${REPO}"
+    echo "  $PYTHON -m pip install --user --force-reinstall --no-cache-dir $REPO_DIR"
     echo ""
     echo "Or run directly with:"
     echo "  $PYTHON -m nettest.cli doctor"
