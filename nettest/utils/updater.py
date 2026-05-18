@@ -3,7 +3,7 @@ Auto-update checker for nettest.
 
 Compares the locally installed version against the latest on GitHub.
 Always checks live — no caching. Updates by downloading the repo zip
-and installing locally — no git required, no pip cache games.
+and installing locally — no git required.
 """
 from __future__ import annotations
 
@@ -16,13 +16,13 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.error
 import zipfile
 from typing import Optional, Tuple
 
 REPO_OWNER = "rockgod407"
 REPO_NAME = "BTW-NTS"
 ZIP_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/archive/refs/heads/main.zip"
-VERSION_API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/setup.cfg"
 
 # Legacy cache file — clean it up if it exists
 _STATE_DIR = pathlib.Path.home() / ".nettest"
@@ -47,17 +47,18 @@ def _get_local_version() -> Optional[str]:
 def _get_remote_version() -> Optional[str]:
     """
     Fetch the version string from setup.cfg on GitHub.
-    Uses the GitHub API to avoid CDN caching.
+
+    Uses raw.githubusercontent.com — no rate limits, no auth needed.
+    Has a ~5 min CDN cache which is fine for manual update checks.
     """
     try:
-        req = urllib.request.Request(
-            VERSION_API_URL,
-            headers={
-                "Accept": "application/vnd.github.v3.raw",
-                "User-Agent": "nettest-updater",
-                "Cache-Control": "no-cache, no-store",
-            },
-        )
+        # Append a cache-buster based on the current minute so we get
+        # a fresh response within a few minutes of any push
+        cache_bust = int(time.time() // 60)
+        url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/setup.cfg?v={cache_bust}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "nettest-updater",
+        })
         with urllib.request.urlopen(req, timeout=10) as resp:
             content = resp.read().decode()
             for line in content.splitlines():
@@ -74,8 +75,7 @@ def check_for_update(force: bool = False) -> Tuple[bool, str, str]:
     Check if an update is available. Always checks GitHub live.
 
     Returns (update_available, local_version, remote_version).
-    The force parameter is kept for API compatibility but is ignored
-    — we always check live now.
+    If we can't reach GitHub, remote_version will be "unknown".
     """
     # Clean up old cache file if it exists
     try:
@@ -88,8 +88,10 @@ def check_for_update(force: bool = False) -> Tuple[bool, str, str]:
     remote_ver = _get_remote_version()
 
     if remote_ver is None:
-        # Network error — can't check, skip silently
-        return (False, local_ver, local_ver)
+        # Couldn't reach GitHub — return "unknown" so the caller
+        # can tell the user we couldn't check, rather than lying
+        # and saying they're up to date
+        return (False, local_ver, "unknown")
 
     update_available = (remote_ver != local_ver)
     return (update_available, local_ver, remote_ver)
@@ -128,8 +130,8 @@ def run_update(verbose: bool = False) -> Tuple[bool, str]:
         # The zip extracts to a folder named BTW-NTS-main/
         repo_dir = os.path.join(tmp_dir, f"{REPO_NAME}-main")
         if not os.path.isdir(repo_dir):
-            # Try to find it
-            dirs = [d for d in os.listdir(tmp_dir) if os.path.isdir(os.path.join(tmp_dir, d))]
+            dirs = [d for d in os.listdir(tmp_dir)
+                    if os.path.isdir(os.path.join(tmp_dir, d))]
             if dirs:
                 repo_dir = os.path.join(tmp_dir, dirs[0])
             else:
@@ -141,10 +143,10 @@ def run_update(verbose: bool = False) -> Tuple[bool, str]:
             cmd = [
                 sys.executable, "-m", "pip", "install",
                 "--force-reinstall", "--no-cache-dir", "--no-deps",
-                repo_dir,
             ]
             if use_user:
-                cmd.insert(-1, "--user")
+                cmd.append("--user")
+            cmd.append(repo_dir)
 
             if verbose:
                 print(f"  Running: {' '.join(cmd)}")
@@ -161,10 +163,11 @@ def run_update(verbose: bool = False) -> Tuple[bool, str]:
                 # so we don't churn existing packages)
                 dep_cmd = [
                     sys.executable, "-m", "pip", "install",
-                    "--no-cache-dir", repo_dir,
+                    "--no-cache-dir",
                 ]
                 if use_user:
-                    dep_cmd.insert(-1, "--user")
+                    dep_cmd.append("--user")
+                dep_cmd.append(repo_dir)
 
                 subprocess.run(
                     dep_cmd,
@@ -195,7 +198,6 @@ def run_update(verbose: bool = False) -> Tuple[bool, str]:
     except Exception as e:
         return (False, f"Update error: {e}")
     finally:
-        # Clean up temp dir
         if tmp_dir and os.path.exists(tmp_dir):
             try:
                 shutil.rmtree(tmp_dir)

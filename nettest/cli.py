@@ -233,6 +233,15 @@ def update(check_only, force, verbose):
     console.print(f"  Latest:    [bold]{remote_ver}[/]")
     console.print()
 
+    # If we couldn't reach GitHub, say so clearly
+    if remote_ver == "unknown":
+        console.print("[bold red]Could not reach GitHub to check for updates.[/]")
+        console.print("[dim]Check your internet connection, or reinstall manually:[/]")
+        console.print("[dim]  curl -fsSL https://raw.githubusercontent.com/rockgod407/BTW-NTS/main/install.sh | bash[/]\n")
+        if not force:
+            return
+        console.print("[dim]Proceeding with --force reinstall anyway...[/]\n")
+
     if not update_available and not force:
         console.print("[bold green]You're on the latest version![/]")
         console.print("[dim]Use --force to reinstall anyway.[/]\n")
