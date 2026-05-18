@@ -1297,8 +1297,21 @@ def receive(protocol, session, duration, source, universe, port, multicast, outp
     console.print(f"[dim]Start the sender on the other machine with:[/]")
     console.print(f"[bold]  nettest send --protocol {protocol} --session {session} --duration {_format_duration(duration)}[/]\n")
 
+    _waiting_printed = [False]
+
     def _snap(s):
         elapsed = s.get("elapsed_s", 0)
+        status = s.get("status", "")
+
+        if status == "waiting_for_sender":
+            if not _waiting_printed[0]:
+                console.print(f"  [bold yellow]Waiting for sender to appear on the network...[/]")
+                console.print(f"  [dim]Start the sender on the other machine now.[/]")
+                _waiting_printed[0] = True
+            else:
+                console.print(f"  [dim][{_format_duration(int(elapsed))}] searching for NDI source...[/]")
+            return
+
         received = s.get("received", 0)
         dropped = s.get("dropped", 0)
         corrupted = s.get("corrupted", 0)
@@ -1314,6 +1327,8 @@ def receive(protocol, session, duration, source, universe, port, multicast, outp
     if protocol == "ndi":
         from nettest.tests.av.receiver import receive_ndi
         print_header(f"NDI Verified Receiver | Session {session} | {_format_duration(duration)}")
+        console.print(f"  [bold yellow]Waiting for sender to appear on the network...[/]")
+        console.print(f"  [dim]Start the sender on the other machine now.[/]\n")
         results = receive_ndi(session, source, duration, on_snapshot=_snap)
 
     elif protocol == "sacn":

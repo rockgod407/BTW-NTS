@@ -65,18 +65,38 @@ def receive_ndi(
 
     state = ReceiverState(session_id=session_id, protocol="NDI")
     start = time.monotonic()
+    deadline = time.monotonic() + duration_seconds
 
     try:
-        # Find the source
+        # Wait for the sender to appear on the network.
+        # Keep retrying discovery until a source shows up or the
+        # test duration expires — the sender may not have started yet.
         finder = ndi.find_create_v2()
-        ndi.find_wait_for_sources(finder, timeout_ms=5000)
-        sources = ndi.find_get_current_sources(finder)
-
         target = None
-        for src in sources:
-            if not source_name or source_name.lower() in src.ndi_name.lower():
-                target = src
+
+        while time.monotonic() < deadline:
+            ndi.find_wait_for_sources(finder, timeout_ms=3000)
+            sources = ndi.find_get_current_sources(finder)
+
+            for src in sources:
+                if not source_name or source_name.lower() in src.ndi_name.lower():
+                    target = src
+                    break
+
+            if target is not None:
                 break
+
+            # Show waiting message via snapshot callback
+            if on_snapshot:
+                elapsed = time.monotonic() - start
+                on_snapshot({
+                    "elapsed_s": round(elapsed, 1),
+                    "received": 0,
+                    "dropped": 0,
+                    "corrupted": 0,
+                    "drop_rate_pct": 0,
+                    "status": "waiting_for_sender",
+                })
 
         ndi.find_destroy(finder)
 
@@ -86,7 +106,7 @@ def receive_ndi(
                 name="NDI Verified Receiver",
                 category="ndi",
                 status=Status.FAIL,
-                message=f"Source '{source_name}' not found. Available: {[s.ndi_name for s in sources]}",
+                message=f"No NDI source appeared within {duration_seconds}s. Start the sender on the other machine first.",
                 duration_ms=(time.monotonic() - start) * 1000,
             ))
             return results
@@ -95,7 +115,7 @@ def receive_ndi(
             name=f"NDI Receiver Connected (session={session_id})",
             category="ndi",
             status=Status.PASS,
-            message=f"Connected to '{target.ndi_name}' | waiting for session {session_id}",
+            message=f"Connected to '{target.ndi_name}' | receiving session {session_id}",
             duration_ms=(time.monotonic() - start) * 1000,
         ))
 
