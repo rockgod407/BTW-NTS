@@ -1226,6 +1226,87 @@ def calc(protocol, preset, count):
 
 
 # ---------------------------------------------------------------------------
+# Session discovery helper (for receiver auto-connect)
+# ---------------------------------------------------------------------------
+
+def _discover_session_interactive(protocol_filter=None):
+    """
+    Scan for active sender sessions on the LAN via beacon.
+
+    Returns a SessionInfo if one is found/selected, or None if nothing
+    was discovered.
+    """
+    from nettest.utils.beacon import discover_sessions
+
+    console.print(f"\n[bold cyan]Scanning for active sessions on the LAN...[/]")
+    if protocol_filter:
+        console.print(f"[dim]Filtering for protocol: {protocol_filter}[/]")
+    console.print(f"[dim]Listening for beacons (up to 6 seconds)...[/]\n")
+
+    sessions = discover_sessions(timeout=6.0, protocol_filter=protocol_filter)
+
+    if not sessions:
+        return None
+
+    if len(sessions) == 1:
+        s = sessions[0]
+        console.print(f"[bold green]Found 1 active session:[/]\n")
+        _print_session_table(sessions)
+        return s
+
+    # Multiple sessions — let the user pick
+    console.print(f"[bold green]Found {len(sessions)} active session(s):[/]\n")
+    _print_session_table(sessions)
+
+    console.print()
+    while True:
+        try:
+            choice = console.input(
+                f"[yellow]Select session (1-{len(sessions)}, or 'q' to quit): [/]"
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return None
+
+        if choice.lower() in ("q", "quit"):
+            return None
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(sessions):
+                return sessions[idx]
+        except ValueError:
+            pass
+        console.print(f"[red]Invalid choice. Enter 1-{len(sessions)} or 'q'.[/]")
+
+
+def _print_session_table(sessions):
+    """Print a Rich table of discovered sessions."""
+    table = Table(box=box.ROUNDED, show_header=True, header_style="bold")
+    table.add_column("#", style="bold", justify="right", width=3)
+    table.add_column("Session", style="cyan", min_width=8)
+    table.add_column("Protocol", min_width=8)
+    table.add_column("Preset", min_width=10)
+    table.add_column("Sender", min_width=12)
+    table.add_column("IP", min_width=12)
+    table.add_column("Duration", min_width=8)
+    table.add_column("Started", min_width=8)
+
+    for i, s in enumerate(sessions, 1):
+        table.add_row(
+            str(i),
+            str(s.session_id),
+            s.protocol.upper(),
+            s.preset or "—",
+            s.hostname,
+            s.sender_ip,
+            s.duration or "—",
+            s.age_display,
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
 # End-to-end: send + receive (two-machine verified testing)
 # ---------------------------------------------------------------------------
 
@@ -1249,31 +1330,50 @@ def send(protocol, preset, session, duration, source_name, target, port, pattern
     """
     Send a verified AV signal for end-to-end testing.
 
-    Run this on Machine A, then run 'nettest receive' on Machine B
-    with the same --session ID. The receiver validates every
-    frame/packet for drops, corruption, reordering, and latency.
+    Run this on Machine A, then run 'nettest receive' on Machine B.
+    The receiver auto-discovers the session on the LAN — no need to
+    copy session IDs.
 
     \b
     Examples:
-      Machine A:  nettest send --protocol ndi --preset 1080p60 --session 12345 --duration 1h
-      Machine B:  nettest receive --protocol ndi --session 12345 --duration 1h
+      Machine A:  nettest send --protocol ndi --preset 1080p60 --duration 1h
+      Machine B:  nettest receive                    # auto-discovers!
 
-      Machine A:  nettest send --protocol sacn --preset concert --session 99999
-      Machine B:  nettest receive --protocol sacn --session 99999
+      Machine A:  nettest send --protocol sacn --preset concert
+      Machine B:  nettest receive --protocol sacn    # filter by protocol
 
-      Machine A:  nettest send --protocol dante --preset concert-foh --session 55555
-      Machine B:  nettest receive --protocol dante --session 55555
+      Machine A:  nettest send --protocol dante --preset concert-foh
+      Machine B:  nettest receive
     """
     from nettest.tests.av.verification import generate_session_id
     from nettest.tests.av.presets import NDI_PRESETS, SACN_PRESETS, DANTE_PRESETS
     from nettest.utils.output import print_header, print_result
+    from nettest.utils.beacon import BeaconSender
 
     if session is None:
         session = generate_session_id()
 
+    # Resolve preset name early so we can include it in the beacon
+    preset_name = preset or ""
+    if protocol == "ndi":
+        preset_name = preset or "1080p30"
+    elif protocol == "sacn":
+        preset_name = preset or "concert"
+
     console.print(f"\n[bold yellow]━━━ SESSION ID: {session} ━━━[/]")
     console.print(f"[dim]Start the receiver on the other machine with:[/]")
-    console.print(f"[bold]  nettest receive --protocol {protocol} --session {session} --duration {_format_duration(duration)}[/]\n")
+    console.print(f"[bold]  nettest receive --protocol {protocol} --duration {_format_duration(duration)}[/]")
+    console.print(f"[dim]The receiver will auto-discover this session on the LAN.[/]\n")
+
+    # Start the LAN beacon so receivers can auto-discover this session
+    beacon = BeaconSender(
+        session_id=session,
+        protocol=protocol,
+        preset=preset_name,
+        duration=_format_duration(duration),
+    )
+    beacon.start()
+    console.print(f"[dim]Broadcasting session beacon on LAN (port 5557)...[/]\n")
 
     def _snap(s):
         elapsed = s.get("elapsed_s", 0)
@@ -1285,50 +1385,54 @@ def send(protocol, preset, session, duration, source_name, target, port, pattern
 
     results = []
 
-    if protocol == "ndi":
-        from nettest.tests.av.sender import send_ndi
-        p = NDI_PRESETS.get(preset or "1080p30")
-        if not p:
-            console.print(f"[bold red]Unknown NDI preset '{preset}'[/]")
-            sys.exit(1)
-        print_header(f"NDI Verified Sender: {p.name} | Session {session} | {_format_duration(duration)}")
-        results = send_ndi(p, session, duration, source_name, on_snapshot=_snap)
-
-    elif protocol == "sacn":
-        from nettest.tests.av.sender import send_sacn
-        p = SACN_PRESETS.get(preset or "concert")
-        if not p:
-            console.print(f"[bold red]Unknown sACN preset '{preset}'[/]")
-            sys.exit(1)
-        print_header(f"sACN Verified Sender: {p.name} | Session {session} | {_format_duration(duration)}")
-        results = send_sacn(p, session, duration, pattern, on_snapshot=_snap)
-
-    elif protocol in ("dante", "udp"):
-        from nettest.tests.av.sender import send_udp
-        if preset:
-            p = DANTE_PRESETS.get(preset)
+    try:
+        if protocol == "ndi":
+            from nettest.tests.av.sender import send_ndi
+            p = NDI_PRESETS.get(preset or "1080p30")
             if not p:
-                console.print(f"[bold red]Unknown Dante preset '{preset}'[/]")
+                console.print(f"[bold red]Unknown NDI preset '{preset}'[/]")
                 sys.exit(1)
-            label = f"Dante Verified Sender: {p.name}"
-            payload_size = max(64, min(int((p.per_network_bandwidth_mbps * 1_000_000 / 8) / p.packets_per_second), 1400))
-            pps = p.packets_per_second
-        else:
-            label = f"UDP Verified Sender"
-            payload_size = 256
-            pps = 1000
+            print_header(f"NDI Verified Sender: {p.name} | Session {session} | {_format_duration(duration)}")
+            results = send_ndi(p, session, duration, source_name, on_snapshot=_snap)
 
-        print_header(f"{label} | Session {session} | {_format_duration(duration)}")
-        results = send_udp(
-            protocol_name="Dante" if protocol == "dante" else "UDP",
-            target_ip=target,
-            target_port=port,
-            session_id=session,
-            payload_size=payload_size,
-            packets_per_second=pps,
-            duration_seconds=duration,
-            on_snapshot=_snap,
-        )
+        elif protocol == "sacn":
+            from nettest.tests.av.sender import send_sacn
+            p = SACN_PRESETS.get(preset or "concert")
+            if not p:
+                console.print(f"[bold red]Unknown sACN preset '{preset}'[/]")
+                sys.exit(1)
+            print_header(f"sACN Verified Sender: {p.name} | Session {session} | {_format_duration(duration)}")
+            results = send_sacn(p, session, duration, pattern, on_snapshot=_snap)
+
+        elif protocol in ("dante", "udp"):
+            from nettest.tests.av.sender import send_udp
+            if preset:
+                p = DANTE_PRESETS.get(preset)
+                if not p:
+                    console.print(f"[bold red]Unknown Dante preset '{preset}'[/]")
+                    sys.exit(1)
+                label = f"Dante Verified Sender: {p.name}"
+                payload_size = max(64, min(int((p.per_network_bandwidth_mbps * 1_000_000 / 8) / p.packets_per_second), 1400))
+                pps = p.packets_per_second
+            else:
+                label = f"UDP Verified Sender"
+                payload_size = 256
+                pps = 1000
+
+            print_header(f"{label} | Session {session} | {_format_duration(duration)}")
+            results = send_udp(
+                protocol_name="Dante" if protocol == "dante" else "UDP",
+                target_ip=target,
+                target_port=port,
+                session_id=session,
+                payload_size=payload_size,
+                packets_per_second=pps,
+                duration_seconds=duration,
+                on_snapshot=_snap,
+            )
+    finally:
+        # Always stop the beacon when we're done
+        beacon.stop()
 
     console.print()
     for r in results:
@@ -1349,10 +1453,10 @@ def send(protocol, preset, session, duration, source_name, target, port, pattern
 @click.option(
     "--protocol",
     type=click.Choice(["ndi", "sacn", "dante", "udp"]),
-    required=True,
-    help="Protocol to receive",
+    default=None,
+    help="Protocol to receive (auto-detected from session if omitted)",
 )
-@click.option("--session", default=None, type=int, help="Session ID (must match sender; auto-generated if omitted)")
+@click.option("--session", default=None, type=int, help="Session ID (auto-discovered from LAN if omitted)")
 @click.option("--duration", default="5m", type=DURATION, help="Duration (e.g. 5m, 1h, 2h30m)")
 @click.option("--source", default="", help="NDI source name (optional, matches any if empty)")
 @click.option("--universe", default=1, type=int, help="sACN universe to listen on (default: 1)")
@@ -1364,8 +1468,12 @@ def receive(protocol, session, duration, source, universe, port, multicast, outp
     """
     Receive and validate a verified AV signal for end-to-end testing.
 
-    Run this on Machine B after starting 'nettest send' on Machine A
-    with the same --session ID. Validates every frame/packet for:
+    Run this on Machine B after starting 'nettest send' on Machine A.
+    The receiver auto-discovers active sessions on the LAN — no need
+    to remember session IDs.
+
+    \b
+    Validates every frame/packet for:
       - Dropped frames (sequence gaps)
       - Corrupted data (CRC mismatch)
       - Reordered packets
@@ -1376,19 +1484,48 @@ def receive(protocol, session, duration, source, universe, port, multicast, outp
 
     \b
     Examples:
-      nettest receive --protocol ndi --session 12345 --duration 1h
-      nettest receive --protocol sacn --session 99999 --universe 1
-      nettest receive --protocol dante --session 55555 --port 4321
+      nettest receive                          # Auto-discover sender on LAN
+      nettest receive --protocol ndi           # Only look for NDI sessions
+      nettest receive --session 12345          # Connect to a specific session
+      nettest receive --protocol sacn --universe 1
+      nettest receive --protocol dante --port 4321
     """
     from nettest.utils.output import print_header, print_result
     from nettest.tests.av.verification import generate_session_id
 
+    # ------------------------------------------------------------------
+    # Auto-discover sessions from LAN beacons if --session not provided
+    # ------------------------------------------------------------------
     if session is None:
-        session = generate_session_id()
+        session_info = _discover_session_interactive(protocol_filter=protocol)
+        if session_info is not None:
+            session = session_info.session_id
+            # Auto-fill protocol from discovered session if not specified
+            if protocol is None:
+                protocol = session_info.protocol
+            # Override duration with sender's duration if user didn't specify one
+            console.print(f"\n[bold green]Connecting to session {session}[/]")
+            console.print(f"  [dim]Sender: {session_info.hostname} ({session_info.sender_ip})[/]")
+            console.print(f"  [dim]Protocol: {session_info.protocol} | Preset: {session_info.preset} | Duration: {session_info.duration}[/]\n")
+        else:
+            # No session discovered — need at least a protocol to continue
+            if protocol is None:
+                console.print("[bold red]No active sessions found and --protocol not specified.[/]")
+                console.print("[dim]Start a sender first:  nettest send --protocol ndi --duration 5m[/]")
+                console.print("[dim]Or specify a protocol: nettest receive --protocol ndi[/]\n")
+                sys.exit(1)
+            session = generate_session_id()
+            console.print(f"\n[bold yellow]No active sessions found on the LAN.[/]")
+            console.print(f"[dim]Generated session ID: {session}[/]")
+            console.print(f"[dim]Start the sender on the other machine with:[/]")
+            console.print(f"[bold]  nettest send --protocol {protocol} --session {session} --duration {_format_duration(duration)}[/]\n")
+    else:
+        # Session was provided explicitly
+        if protocol is None:
+            console.print("[bold red]--protocol is required when using --session.[/]")
+            sys.exit(1)
 
-    console.print(f"\n[bold yellow]━━━ SESSION ID: {session} ━━━[/]")
-    console.print(f"[dim]Start the sender on the other machine with:[/]")
-    console.print(f"[bold]  nettest send --protocol {protocol} --session {session} --duration {_format_duration(duration)}[/]\n")
+    console.print(f"[bold yellow]━━━ SESSION {session} | {protocol.upper()} ━━━[/]")
 
     _waiting_printed = [False]
 
@@ -1465,6 +1602,67 @@ def receive(protocol, session, duration, source, universe, port, multicast, outp
         for r in results:
             suite.add(r)
         _export_report(suite, output_path)
+
+
+# ---------------------------------------------------------------------------
+# Session discovery (standalone scan)
+# ---------------------------------------------------------------------------
+
+@main.command("sessions")
+@click.option(
+    "--protocol",
+    type=click.Choice(["ndi", "sacn", "dante", "udp"]),
+    default=None,
+    help="Filter by protocol",
+)
+@click.option("--timeout", default=6, type=int, help="How long to listen for beacons (default: 6s)")
+@click.option("--watch", is_flag=True, default=False, help="Keep scanning (Ctrl+C to stop)")
+def sessions(protocol, timeout, watch):
+    """
+    Scan the LAN for active nettest sender sessions.
+
+    Shows all active senders broadcasting beacons. Use this to see
+    what's running before starting a receiver.
+
+    \b
+    Examples:
+        nettest sessions                   # Scan once
+        nettest sessions --watch           # Keep scanning
+        nettest sessions --protocol ndi    # Only NDI sessions
+    """
+    from nettest.utils.beacon import discover_sessions
+    from nettest.utils.output import print_header
+
+    print_header("Session Scanner")
+
+    if not watch:
+        console.print(f"[dim]Listening for beacons ({timeout}s)...[/]\n")
+        found = discover_sessions(timeout=float(timeout), protocol_filter=protocol)
+        if found:
+            console.print(f"[bold green]Found {len(found)} active session(s):[/]\n")
+            _print_session_table(found)
+            console.print()
+            console.print(f"[dim]To connect:  nettest receive --session <ID>[/]")
+            console.print(f"[dim]Or just run: nettest receive  (auto-connects)[/]\n")
+        else:
+            console.print("[bold yellow]No active sessions found.[/]")
+            console.print("[dim]Start a sender first:  nettest send --protocol ndi --duration 5m[/]\n")
+        return
+
+    # Watch mode — keep scanning
+    console.print(f"[dim]Watching for sessions (Ctrl+C to stop)...[/]\n")
+    try:
+        while True:
+            found = discover_sessions(timeout=float(timeout), protocol_filter=protocol)
+            # Clear and redraw
+            if found:
+                console.print(f"[bold green]Active sessions ({len(found)}):[/]")
+                _print_session_table(found)
+            else:
+                console.print("[dim]No active sessions. Scanning...[/]")
+            console.print()
+    except KeyboardInterrupt:
+        console.print("\n[dim]Stopped.[/]\n")
 
 
 if __name__ == "__main__":
