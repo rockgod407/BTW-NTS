@@ -214,21 +214,32 @@ def _maybe_update_check():
 @main.command("update")
 @click.option("--check", "check_only", is_flag=True, default=False, help="Only check, don't install")
 @click.option("--force", is_flag=True, default=False, help="Force reinstall even if version matches")
-@click.option("-v", "--verbose", is_flag=True, default=False, help="Show pip output during install")
-def update(check_only, force, verbose):
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Show installer output")
+@click.option("--debug", is_flag=True, default=False, help="Run diagnostics on the update system")
+def update(check_only, force, verbose, debug):
     """
     Check for and install updates.
 
     Checks GitHub for a newer version and offers to install it.
-    Downloads the repo as a zip — no git or caching involved.
+    Runs the same install script as the curl installer.
 
     \b
     Examples:
         nettest update           # Check and install if available
         nettest update --check   # Just check, don't install
         nettest update --force   # Force reinstall from GitHub
+        nettest update --debug   # Diagnose update problems
     """
-    from nettest.utils.updater import check_for_update, run_update
+    from nettest.utils.updater import check_for_update, run_update, get_last_error
+
+    # Debug mode — run full diagnostics
+    if debug:
+        from nettest.utils.updater import run_diagnostics
+        console.print("[bold cyan]Running update diagnostics...[/]\n")
+        report = run_diagnostics()
+        console.print(report)
+        console.print()
+        return
 
     console.print("[dim]Checking GitHub for latest version...[/]")
     update_available, local_ver, remote_ver = check_for_update()
@@ -237,10 +248,15 @@ def update(check_only, force, verbose):
     console.print(f"  Latest:    [bold]{remote_ver}[/]")
     console.print()
 
-    # If we couldn't reach GitHub, say so clearly
+    # If we couldn't reach GitHub, say so with the actual error
     if remote_ver == "unknown":
+        error = get_last_error()
         console.print("[bold red]Could not reach GitHub to check for updates.[/]")
-        console.print("[dim]Check your internet connection, or reinstall manually:[/]")
+        if error:
+            console.print(f"[red]  Error: {error}[/]")
+        console.print()
+        console.print("[dim]Run [bold]nettest update --debug[/bold] for full diagnostics.[/]")
+        console.print("[dim]Or reinstall manually:[/]")
         console.print("[dim]  curl -fsSL https://raw.githubusercontent.com/rockgod407/BTW-NTS/main/install.sh | bash[/]\n")
         if not force:
             return
