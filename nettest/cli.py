@@ -89,12 +89,12 @@ def main(ctx, config_path, categories, verbose, quick, output_path):
         nettest av-discover                # Discover all AV devices
     """
     if ctx.invoked_subcommand is not None:
-        # First-run check (runs once, before any subcommand)
         _maybe_first_run_check()
+        _maybe_update_check()
         return
 
-    # First-run check
     _maybe_first_run_check()
+    _maybe_update_check()
 
     try:
         config = load_config(config_path)
@@ -162,6 +162,99 @@ def _maybe_first_run_check():
     console.print()
     console.print("[dim]Run [bold]nettest doctor[/bold] for a full diagnostic and auto-install.[/]")
     console.print("[dim]Run [bold]nettest doctor --fix[/bold] to auto-install everything possible.[/]\n")
+
+
+# ---------------------------------------------------------------------------
+# Update check (daily, cached)
+# ---------------------------------------------------------------------------
+
+def _maybe_update_check():
+    """Check for updates once per day, prompt the user if one is available."""
+    try:
+        from nettest.utils.updater import check_for_update, run_update
+
+        update_available, local_ver, remote_ver = check_for_update()
+
+        if not update_available:
+            return
+
+        console.print(f"\n[bold yellow]Update available:[/] {local_ver} → [bold green]{remote_ver}[/]")
+
+        try:
+            response = console.input("[yellow]Update now? (Y/n): [/]").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return
+
+        if response in ("", "y", "yes"):
+            console.print("[dim]Updating...[/]")
+            success, message = run_update()
+            if success:
+                console.print(f"[bold green]{message}[/]\n")
+                sys.exit(0)
+            else:
+                console.print(f"[bold red]{message}[/]")
+                console.print("[dim]Continuing with current version...[/]\n")
+        else:
+            console.print("[dim]Skipping update.[/]\n")
+
+    except Exception:
+        # Never let the update check break normal usage
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Update command
+# ---------------------------------------------------------------------------
+
+@main.command("update")
+@click.option("--check", "check_only", is_flag=True, default=False, help="Only check, don't install")
+def update(check_only):
+    """
+    Check for and install updates.
+
+    Checks GitHub for a newer version and offers to install it.
+
+    \b
+    Examples:
+        nettest update           # Check and install if available
+        nettest update --check   # Just check, don't install
+    """
+    from nettest.utils.updater import check_for_update, run_update, clear_cache
+
+    clear_cache()  # Force a fresh check
+    console.print("[dim]Checking for updates...[/]")
+    update_available, local_ver, remote_ver = check_for_update(force=True)
+
+    console.print(f"  Installed: [bold]{local_ver}[/]")
+    console.print(f"  Latest:    [bold]{remote_ver}[/]")
+    console.print()
+
+    if not update_available:
+        console.print("[bold green]You're on the latest version![/]\n")
+        return
+
+    console.print(f"[bold yellow]Update available: {local_ver} → {remote_ver}[/]\n")
+
+    if check_only:
+        console.print(f"[dim]Run [bold]nettest update[/bold] to install.[/]\n")
+        return
+
+    try:
+        response = console.input("[yellow]Install update? (Y/n): [/]").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print()
+        return
+
+    if response in ("", "y", "yes"):
+        console.print("\n[dim]Downloading and installing...[/]\n")
+        success, message = run_update()
+        if success:
+            console.print(f"[bold green]{message}[/]\n")
+        else:
+            console.print(f"[bold red]{message}[/]\n")
+    else:
+        console.print("[dim]Update cancelled.[/]\n")
 
 
 # ---------------------------------------------------------------------------
