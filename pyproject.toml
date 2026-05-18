@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nettest"
-version = "0.4.1"
+version = "0.4.2"
 description = "Comprehensive network test suite for connectivity, performance, and security testing"
 requires-python = ">=3.9"
 dependencies = [

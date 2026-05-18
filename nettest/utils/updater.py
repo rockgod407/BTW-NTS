@@ -1,20 +1,20 @@
 """
 Auto-update for nettest.
 
-Version check: fetches setup.cfg from GitHub raw, compares versions.
+Version check: fetches setup.cfg from GitHub, compares versions.
 Update: downloads and runs install.sh — the exact same script the
-curl installer uses. Simple, no pip caching games, always works.
+curl installer uses.
+
+Uses the `requests` library (already a nettest dependency) instead
+of urllib to avoid SSL certificate issues on macOS.
 """
 from __future__ import annotations
 
 import os
-import ssl
 import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
-import urllib.error
 from typing import Optional, Tuple
 
 REPO_OWNER = "rockgod407"
@@ -22,43 +22,26 @@ REPO_NAME = "BTW-NTS"
 INSTALL_SCRIPT_URL = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/install.sh"
 VERSION_URL = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/setup.cfg"
 
-# Store the last error so --debug can show it
+# Store the last error for diagnostics
 _last_error: Optional[str] = None
 
 
 def _fetch_url(url: str, timeout: int = 10) -> Optional[bytes]:
     """
-    Fetch a URL, handling SSL certificate issues on macOS.
-    Returns the response bytes or None on failure.
+    Fetch a URL using the requests library.
+    requests uses certifi for SSL certs, which bypasses the broken
+    macOS system Python SSL certificate store.
     """
     global _last_error
     _last_error = None
 
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "nettest-updater",
-    })
-
-    # First try: normal SSL
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
-    except ssl.SSLCertVerificationError as e:
-        _last_error = f"SSL certificate error: {e}"
-        # macOS Python often has missing/outdated certificates.
-        # Fall back to unverified context for GitHub (safe — it's HTTPS to a known host)
-        try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-                _last_error = None
-                return resp.read()
-        except Exception as e2:
-            _last_error = f"SSL fallback also failed: {e2}"
-            return None
-    except urllib.error.URLError as e:
-        _last_error = f"URL error: {e}"
-        return None
+        import requests
+        resp = requests.get(url, timeout=timeout, headers={
+            "User-Agent": "nettest-updater",
+        })
+        resp.raise_for_status()
+        return resp.content
     except Exception as e:
         _last_error = f"{type(e).__name__}: {e}"
         return None
@@ -82,7 +65,6 @@ def _get_local_version() -> Optional[str]:
 def _get_remote_version() -> Optional[str]:
     """
     Fetch the version from setup.cfg on GitHub.
-    Uses raw.githubusercontent.com — no rate limits.
     """
     cache_bust = int(time.time() // 60)
     url = f"{VERSION_URL}?v={cache_bust}"
@@ -97,15 +79,13 @@ def _get_remote_version() -> Optional[str]:
 
 
 def get_last_error() -> Optional[str]:
-    """Return the last error from a failed fetch, for diagnostics."""
+    """Return the last error from a failed fetch."""
     return _last_error
 
 
 def check_for_update(force: bool = False) -> Tuple[bool, str, str]:
     """
     Check if an update is available. Always checks GitHub live.
-
-    Returns (update_available, local_version, remote_version).
     """
     local_ver = _get_local_version() or "unknown"
     remote_ver = _get_remote_version()
@@ -120,10 +100,6 @@ def check_for_update(force: bool = False) -> Tuple[bool, str, str]:
 def run_update(verbose: bool = False) -> Tuple[bool, str]:
     """
     Update by downloading and running install.sh from GitHub.
-    This is the exact same method as the curl installer — simple
-    and proven to work.
-
-    Returns (success, message).
     """
     tmp_dir = None
     try:
@@ -178,22 +154,39 @@ def run_update(verbose: bool = False) -> Tuple[bool, str]:
 
 
 def run_diagnostics() -> str:
-    """
-    Run full diagnostics on the update system. Returns a report string.
-    """
+    """Run full diagnostics on the update system."""
     import platform
     lines = []
     lines.append("=== nettest update diagnostics ===")
     lines.append(f"Python:    {sys.executable} ({platform.python_version()})")
     lines.append(f"Platform:  {platform.platform()}")
-    lines.append(f"SSL:       {ssl.OPENSSL_VERSION}")
+
+    try:
+        import ssl
+        lines.append(f"SSL:       {ssl.OPENSSL_VERSION}")
+    except Exception:
+        lines.append("SSL:       unavailable")
+
+    # Check if requests + certifi are working
+    try:
+        import requests
+        lines.append(f"Requests:  {requests.__version__}")
+    except ImportError:
+        lines.append("Requests:  NOT INSTALLED (this is the problem!)")
+
+    try:
+        import certifi
+        lines.append(f"Certifi:   {certifi.__version__} ({certifi.where()})")
+    except ImportError:
+        lines.append("Certifi:   NOT INSTALLED")
+
     lines.append("")
 
     # Local version
     local = _get_local_version()
     lines.append(f"Local version: {local or 'unknown'}")
 
-    # Test raw.githubusercontent.com
+    # Test fetch
     cache_bust = int(time.time())
     test_url = f"{VERSION_URL}?v={cache_bust}"
     lines.append(f"\nFetching: {test_url}")
@@ -201,7 +194,7 @@ def run_diagnostics() -> str:
     data = _fetch_url(test_url, timeout=15)
     if data is not None:
         lines.append(f"  Status: OK ({len(data)} bytes)")
-        for line in data.decode().splitlines()[:5]:
+        for line in data.decode().splitlines()[:3]:
             lines.append(f"  | {line}")
         remote = None
         for line in data.decode().splitlines():
@@ -211,21 +204,12 @@ def run_diagnostics() -> str:
         lines.append(f"\n  Remote version: {remote}")
         if local and remote:
             if local == remote:
-                lines.append(f"  Result: UP TO DATE")
+                lines.append("  Result: UP TO DATE")
             else:
-                lines.append(f"  Result: UPDATE AVAILABLE ({local} → {remote})")
+                lines.append(f"  Result: UPDATE AVAILABLE ({local} -> {remote})")
     else:
         lines.append(f"  Status: FAILED")
         lines.append(f"  Error:  {_last_error}")
-        lines.append("")
-        lines.append("Possible causes:")
-        lines.append("  - SSL certificate issue (common on macOS system Python)")
-        lines.append("  - Network/firewall blocking raw.githubusercontent.com")
-        lines.append("  - No internet connection")
-        lines.append("")
-        lines.append("Try running this in your terminal to test:")
-        lines.append(f"  curl -sI {VERSION_URL} | head -5")
-        lines.append(f"  python3 -c \"import urllib.request; print(urllib.request.urlopen('{VERSION_URL}').read()[:100])\"")
 
     # Test install.sh URL
     lines.append(f"\nFetching: {INSTALL_SCRIPT_URL}")
