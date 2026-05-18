@@ -942,8 +942,9 @@ def send(protocol, preset, session, duration, source_name, target, port, pattern
     if session is None:
         session = generate_session_id()
 
-    console.print(f"\n[bold yellow]SESSION ID: {session}[/]")
-    console.print(f"[dim]Share this ID with the receiver machine.[/]\n")
+    console.print(f"\n[bold yellow]━━━ SESSION ID: {session} ━━━[/]")
+    console.print(f"[dim]Start the receiver on the other machine with:[/]")
+    console.print(f"[bold]  nettest receive --protocol {protocol} --session {session} --duration {_format_duration(duration)}[/]\n")
 
     def _snap(s):
         elapsed = s.get("elapsed_s", 0)
@@ -1022,7 +1023,7 @@ def send(protocol, preset, session, duration, source_name, target, port, pattern
     required=True,
     help="Protocol to receive",
 )
-@click.option("--session", required=True, type=int, help="Session ID (must match sender)")
+@click.option("--session", default=None, type=int, help="Session ID (must match sender; auto-generated if omitted)")
 @click.option("--duration", default="5m", type=DURATION, help="Duration (e.g. 5m, 1h, 2h30m)")
 @click.option("--source", default="", help="NDI source name (optional, matches any if empty)")
 @click.option("--universe", default=1, type=int, help="sACN universe to listen on (default: 1)")
@@ -1051,9 +1052,14 @@ def receive(protocol, session, duration, source, universe, port, multicast, outp
       nettest receive --protocol dante --session 55555 --port 4321
     """
     from nettest.utils.output import print_header, print_result
+    from nettest.tests.av.verification import generate_session_id
 
-    console.print(f"\n[bold yellow]SESSION ID: {session}[/]")
-    console.print(f"[dim]Listening for sender with this session ID...[/]\n")
+    if session is None:
+        session = generate_session_id()
+
+    console.print(f"\n[bold yellow]━━━ SESSION ID: {session} ━━━[/]")
+    console.print(f"[dim]Start the sender on the other machine with:[/]")
+    console.print(f"[bold]  nettest send --protocol {protocol} --session {session} --duration {_format_duration(duration)}[/]\n")
 
     def _snap(s):
         elapsed = s.get("elapsed_s", 0)
