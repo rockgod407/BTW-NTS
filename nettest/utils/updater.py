@@ -1,8 +1,8 @@
 """
 Auto-update checker for nettest.
 
-Compares the locally installed version against the latest commit on
-GitHub. Prompts the user to update if a newer version is available.
+Compares the locally installed version against the latest on GitHub.
+Prompts the user to update if a newer version is available.
 Caches the check result so it only hits the network once per day.
 """
 from __future__ import annotations
@@ -48,7 +48,6 @@ def _get_local_commit() -> Optional[str]:
     Get the git commit hash that's baked into the installed package.
     Returns None if not available.
     """
-    # Check if we have a stored commit hash
     try:
         commit_file = pathlib.Path(__file__).parent.parent / ".installed_commit"
         if commit_file.exists():
@@ -77,17 +76,47 @@ def _get_remote_commit() -> Optional[str]:
 
 
 def _get_remote_version() -> Optional[str]:
-    """Fetch the version string from pyproject.toml on GitHub."""
+    """
+    Fetch the version string from setup.cfg on GitHub.
+
+    Uses the GitHub API (not raw.githubusercontent.com) to avoid
+    CDN caching that can return stale content for up to 5 minutes.
+    """
     try:
         import urllib.request
-        url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/setup.cfg"
-        req = urllib.request.Request(url, headers={"User-Agent": "nettest-updater"})
+        # Use the API endpoint which doesn't have CDN caching issues
+        url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/setup.cfg"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github.v3.raw",
+                "User-Agent": "nettest-updater",
+            },
+        )
         with urllib.request.urlopen(req, timeout=5) as resp:
             content = resp.read().decode()
             for line in content.splitlines():
                 line = line.strip()
                 if line.startswith("version"):
-                    # version = 0.1.0
+                    # version = 0.3.0
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+
+    # Fallback to raw.githubusercontent.com with cache-busting
+    try:
+        import urllib.request
+        cache_bust = int(time.time())
+        url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/setup.cfg?cb={cache_bust}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "nettest-updater",
+            "Cache-Control": "no-cache",
+        })
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            content = resp.read().decode()
+            for line in content.splitlines():
+                line = line.strip()
+                if line.startswith("version"):
                     return line.split("=", 1)[1].strip()
     except Exception:
         pass
@@ -160,42 +189,61 @@ def check_for_update(force: bool = False) -> Tuple[bool, str, str]:
     return (update_available, local_ver, remote_ver or local_ver)
 
 
-def run_update() -> Tuple[bool, str]:
+def run_update(verbose: bool = False) -> Tuple[bool, str]:
     """
     Run the update by reinstalling from GitHub.
 
+    Uses --force-reinstall and --no-cache-dir to ensure pip actually
+    re-downloads and reinstalls even if it thinks the version matches.
+
     Returns (success, message).
     """
-    try:
-        proc = subprocess.run(
-            [
-                sys.executable, "-m", "pip", "install", "--upgrade",
-                "--user", f"git+https://{REPO_URL.split('://')[1]}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if proc.returncode == 0:
-            return (True, "Update successful! Restart nettest to use the new version.")
-        else:
-            # Try without --user
-            proc2 = subprocess.run(
-                [
-                    sys.executable, "-m", "pip", "install", "--upgrade",
-                    f"git+https://{REPO_URL.split('://')[1]}",
-                ],
-                capture_output=True,
+    git_url = f"git+https://github.com/{REPO_OWNER}/{REPO_NAME}.git"
+
+    # Try with --user first (standard on macOS), then without
+    for use_user in (True, False):
+        cmd = [
+            sys.executable, "-m", "pip", "install",
+            "--upgrade", "--force-reinstall", "--no-cache-dir",
+        ]
+        if use_user:
+            cmd.append("--user")
+        cmd.append(git_url)
+
+        try:
+            # Show pip output so the user can see progress
+            proc = subprocess.run(
+                cmd,
+                capture_output=not verbose,
                 text=True,
                 timeout=120,
             )
-            if proc2.returncode == 0:
+            if proc.returncode == 0:
+                # Clear the update cache so next check is fresh
+                clear_cache()
                 return (True, "Update successful! Restart nettest to use the new version.")
-            return (False, f"Update failed:\n{proc2.stderr.strip().splitlines()[-1] if proc2.stderr else 'unknown error'}")
-    except subprocess.TimeoutExpired:
-        return (False, "Update timed out. Try manually: pip3 install --upgrade git+https://github.com/rockgod407/BTW-NTS.git")
-    except Exception as e:
-        return (False, f"Update error: {e}")
+
+            # If --user failed, try without it
+            if use_user:
+                continue
+
+            # Both attempts failed — report the error
+            error_msg = ""
+            if hasattr(proc, "stderr") and proc.stderr:
+                # Show last few meaningful lines
+                lines = [l for l in proc.stderr.strip().splitlines() if l.strip()]
+                error_msg = "\n".join(lines[-3:])
+
+            return (False, f"Update failed:\n{error_msg or 'unknown error'}\n\nTry manually:\n  pip3 install --upgrade --force-reinstall git+https://github.com/{REPO_OWNER}/{REPO_NAME}.git")
+
+        except subprocess.TimeoutExpired:
+            return (False, f"Update timed out. Try manually:\n  pip3 install --upgrade --force-reinstall git+https://github.com/{REPO_OWNER}/{REPO_NAME}.git")
+        except Exception as e:
+            if use_user:
+                continue
+            return (False, f"Update error: {e}")
+
+    return (False, f"Update failed. Try manually:\n  pip3 install --upgrade --force-reinstall git+https://github.com/{REPO_OWNER}/{REPO_NAME}.git")
 
 
 def clear_cache():

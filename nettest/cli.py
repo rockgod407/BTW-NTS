@@ -209,7 +209,9 @@ def _maybe_update_check():
 
 @main.command("update")
 @click.option("--check", "check_only", is_flag=True, default=False, help="Only check, don't install")
-def update(check_only):
+@click.option("--force", is_flag=True, default=False, help="Force reinstall even if version matches")
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Show pip output during install")
+def update(check_only, force, verbose):
     """
     Check for and install updates.
 
@@ -219,6 +221,7 @@ def update(check_only):
     Examples:
         nettest update           # Check and install if available
         nettest update --check   # Just check, don't install
+        nettest update --force   # Force reinstall from GitHub
     """
     from nettest.utils.updater import check_for_update, run_update, clear_cache
 
@@ -230,31 +233,37 @@ def update(check_only):
     console.print(f"  Latest:    [bold]{remote_ver}[/]")
     console.print()
 
-    if not update_available:
-        console.print("[bold green]You're on the latest version![/]\n")
+    if not update_available and not force:
+        console.print("[bold green]You're on the latest version![/]")
+        console.print("[dim]Use --force to reinstall anyway.[/]\n")
         return
 
-    console.print(f"[bold yellow]Update available: {local_ver} → {remote_ver}[/]\n")
+    if update_available:
+        console.print(f"[bold yellow]Update available: {local_ver} → {remote_ver}[/]\n")
+    else:
+        console.print(f"[bold yellow]Force reinstalling {remote_ver}...[/]\n")
 
     if check_only:
         console.print(f"[dim]Run [bold]nettest update[/bold] to install.[/]\n")
         return
 
-    try:
-        response = console.input("[yellow]Install update? (Y/n): [/]").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        console.print()
-        return
+    if not force:
+        try:
+            response = console.input("[yellow]Install update? (Y/n): [/]").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return
 
-    if response in ("", "y", "yes"):
-        console.print("\n[dim]Downloading and installing...[/]\n")
-        success, message = run_update()
-        if success:
-            console.print(f"[bold green]{message}[/]\n")
-        else:
-            console.print(f"[bold red]{message}[/]\n")
+        if response not in ("", "y", "yes"):
+            console.print("[dim]Update cancelled.[/]\n")
+            return
+
+    console.print("\n[dim]Downloading and installing from GitHub...[/]\n")
+    success, message = run_update(verbose=verbose)
+    if success:
+        console.print(f"[bold green]{message}[/]\n")
     else:
-        console.print("[dim]Update cancelled.[/]\n")
+        console.print(f"[bold red]{message}[/]\n")
 
 
 # ---------------------------------------------------------------------------
