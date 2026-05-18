@@ -54,14 +54,14 @@ def send_ndi(
     """
     results: List[TestResult] = []
 
-    try:
-        import NDIlib as ndi
-    except ImportError:
+    from nettest import ndi_native as ndi
+
+    if not ndi.is_available():
         results.append(TestResult(
             name="NDI Verified Sender",
             category="ndi",
             status=Status.SKIP,
-            message="ndi-python not installed",
+            message=f"NDI not available: {ndi.get_load_error() or 'libndi.dylib not found'}",
             duration_ms=0,
         ))
         return results

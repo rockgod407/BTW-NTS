@@ -5,8 +5,8 @@ Tests NDI source discovery, stream connectivity, and long-form stability
 by receiving frames and tracking drops, frame rate consistency, bandwidth,
 and latency over configurable durations.
 
-Requires: ndi-python (pip install ndi-python)
-          NDI runtime (https://ndi.video/tools/)
+Uses nettest.ndi_native (ctypes wrapper) — avoids the ndi-python
+C extension crash caused by its bundled Python dylib conflict.
 """
 from __future__ import annotations
 
@@ -16,13 +16,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nettest.core.result import Status, TestResult
 from nettest.tests.av.base import LongFormMonitor, LongFormTestConfig, StreamStats
+from nettest import ndi_native as ndi
 
-try:
-    import NDIlib as ndi
-
-    NDI_AVAILABLE = True
-except ImportError:
-    NDI_AVAILABLE = False
+NDI_AVAILABLE = ndi.is_available()
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +35,7 @@ def discover_ndi_sources(timeout_seconds: int = 5) -> TestResult:
             name=name,
             category="ndi",
             status=Status.SKIP,
-            message="ndi-python not installed (pip install ndi-python)",
+            message="NDI not available — run 'nettest doctor' for setup instructions",
             duration_ms=0,
         )
 
@@ -368,7 +364,7 @@ def run_ndi_longform_test(
             name="NDI Long-form Test",
             category="ndi",
             status=Status.SKIP,
-            message="ndi-python not installed (pip install ndi-python)",
+            message="NDI not available — run 'nettest doctor' for setup instructions",
             duration_ms=0,
         ))
         return results

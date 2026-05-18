@@ -56,10 +56,10 @@ CORE_DEPS: List[Tuple[str, str, str, bool, str, str]] = [
 ]
 
 OPTIONAL_DEPS: List[Tuple[str, str, str, bool, str, str]] = [
-    ("ndi-python", "NDIlib", "5.0", False,
-     "1) Install NDI SDK from https://ndi.video/tools/ndi-sdk/\n"
-     "         2) pip3 install ndi-python",
-     "NDI video-over-IP (requires NDI SDK)"),
+    ("NDI (libndi)", "nettest.ndi_native", "5.0", False,
+     "pip3 install ndi-python   (provides libndi.dylib)\n"
+     "         — OR — Install NDI SDK from https://ndi.video/tools/ndi-sdk/",
+     "NDI video-over-IP (ctypes, no ndi-python extension needed)"),
 ]
 
 ALL_DEPS = CORE_DEPS + OPTIONAL_DEPS
