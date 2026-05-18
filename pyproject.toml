@@ -18,6 +18,11 @@ dependencies = [
     "scapy>=2.5",
 ]
 
+[project.optional-dependencies]
+sacn = ["sacn>=1.9"]
+ndi = ["ndi-python>=5.0"]
+all-av = ["sacn>=1.9", "ndi-python>=5.0"]
+
 [project.scripts]
 nettest = "nettest.cli:main"
 
