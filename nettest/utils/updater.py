@@ -1,32 +1,24 @@
 """
-Auto-update checker for nettest.
+Auto-update for nettest.
 
-Compares the locally installed version against the latest on GitHub.
-Always checks live — no caching. Updates by downloading the repo zip
-and installing locally — no git required.
+Version check: fetches setup.cfg from GitHub raw, compares versions.
+Update: downloads and runs install.sh — the exact same script the
+curl installer uses. Simple, no pip caching games, always works.
 """
 from __future__ import annotations
 
-import json
 import os
-import pathlib
-import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
 import urllib.error
-import zipfile
 from typing import Optional, Tuple
 
 REPO_OWNER = "rockgod407"
 REPO_NAME = "BTW-NTS"
-ZIP_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/archive/refs/heads/main.zip"
-
-# Legacy cache file — clean it up if it exists
-_STATE_DIR = pathlib.Path.home() / ".nettest"
-_OLD_CACHE = _STATE_DIR / ".update_check"
+INSTALL_SCRIPT_URL = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/install.sh"
 
 
 def _get_local_version() -> Optional[str]:
@@ -46,22 +38,17 @@ def _get_local_version() -> Optional[str]:
 
 def _get_remote_version() -> Optional[str]:
     """
-    Fetch the version string from setup.cfg on GitHub.
-
-    Uses raw.githubusercontent.com — no rate limits, no auth needed.
-    Has a ~5 min CDN cache which is fine for manual update checks.
+    Fetch the version from setup.cfg on GitHub.
+    Uses raw.githubusercontent.com — no rate limits.
     """
     try:
-        # Append a cache-buster based on the current minute so we get
-        # a fresh response within a few minutes of any push
         cache_bust = int(time.time() // 60)
         url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/setup.cfg?v={cache_bust}"
         req = urllib.request.Request(url, headers={
             "User-Agent": "nettest-updater",
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
-            content = resp.read().decode()
-            for line in content.splitlines():
+            for line in resp.read().decode().splitlines():
                 line = line.strip()
                 if line.startswith("version"):
                     return line.split("=", 1)[1].strip()
@@ -75,22 +62,11 @@ def check_for_update(force: bool = False) -> Tuple[bool, str, str]:
     Check if an update is available. Always checks GitHub live.
 
     Returns (update_available, local_version, remote_version).
-    If we can't reach GitHub, remote_version will be "unknown".
     """
-    # Clean up old cache file if it exists
-    try:
-        if _OLD_CACHE.exists():
-            _OLD_CACHE.unlink()
-    except Exception:
-        pass
-
     local_ver = _get_local_version() or "unknown"
     remote_ver = _get_remote_version()
 
     if remote_ver is None:
-        # Couldn't reach GitHub — return "unknown" so the caller
-        # can tell the user we couldn't check, rather than lying
-        # and saying they're up to date
         return (False, local_ver, "unknown")
 
     update_available = (remote_ver != local_ver)
@@ -99,116 +75,68 @@ def check_for_update(force: bool = False) -> Tuple[bool, str, str]:
 
 def run_update(verbose: bool = False) -> Tuple[bool, str]:
     """
-    Update by downloading the repo zip from GitHub and installing
-    from the local files. No git required, no pip cache issues.
+    Update by downloading and running install.sh from GitHub.
+    This is the exact same method as the curl installer — simple
+    and proven to work.
 
     Returns (success, message).
     """
     tmp_dir = None
     try:
-        # Download the zip
         tmp_dir = tempfile.mkdtemp(prefix="nettest-update-")
-        zip_path = os.path.join(tmp_dir, "repo.zip")
+        script_path = os.path.join(tmp_dir, "install.sh")
 
-        if verbose:
-            print(f"  Downloading {ZIP_URL} ...")
-
-        req = urllib.request.Request(ZIP_URL, headers={
+        # Download install.sh
+        cache_bust = int(time.time())
+        url = f"{INSTALL_SCRIPT_URL}?v={cache_bust}"
+        req = urllib.request.Request(url, headers={
             "User-Agent": "nettest-updater",
         })
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            with open(zip_path, "wb") as f:
-                f.write(resp.read())
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            script_content = resp.read()
 
-        # Extract the zip
+        with open(script_path, "wb") as f:
+            f.write(script_content)
+        os.chmod(script_path, 0o755)
+
         if verbose:
-            print("  Extracting...")
+            print(f"  Downloaded install.sh ({len(script_content)} bytes)")
+            print(f"  Running installer...")
 
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(tmp_dir)
+        # Run install.sh
+        proc = subprocess.run(
+            ["bash", script_path],
+            timeout=180,
+            capture_output=not verbose,
+            text=True,
+        )
 
-        # The zip extracts to a folder named BTW-NTS-main/
-        repo_dir = os.path.join(tmp_dir, f"{REPO_NAME}-main")
-        if not os.path.isdir(repo_dir):
-            dirs = [d for d in os.listdir(tmp_dir)
-                    if os.path.isdir(os.path.join(tmp_dir, d))]
-            if dirs:
-                repo_dir = os.path.join(tmp_dir, dirs[0])
-            else:
-                return (False, "Update failed: could not find extracted repo directory.")
-
-        # Install from the local directory
-        # Try with --user first (standard on macOS), then without
-        for use_user in (True, False):
-            cmd = [
-                sys.executable, "-m", "pip", "install",
-                "--force-reinstall", "--no-cache-dir", "--no-deps",
-            ]
-            if use_user:
-                cmd.append("--user")
-            cmd.append(repo_dir)
-
-            if verbose:
-                print(f"  Running: {' '.join(cmd)}")
-
-            proc = subprocess.run(
-                cmd,
-                capture_output=not verbose,
-                text=True,
-                timeout=120,
-            )
-
-            if proc.returncode == 0:
-                # Now install deps separately (without --force-reinstall
-                # so we don't churn existing packages)
-                dep_cmd = [
-                    sys.executable, "-m", "pip", "install",
-                    "--no-cache-dir",
-                ]
-                if use_user:
-                    dep_cmd.append("--user")
-                dep_cmd.append(repo_dir)
-
-                subprocess.run(
-                    dep_cmd,
-                    capture_output=not verbose,
-                    text=True,
-                    timeout=120,
-                )
-
-                return (True, "Update successful! Restart nettest to use the new version.")
-
-            # If --user failed, try without
-            if use_user:
-                continue
-
-            # Both failed
-            error_msg = ""
+        if proc.returncode == 0:
+            # Verify the update actually took effect
+            new_ver = _get_remote_version() or "latest"
+            return (True, f"Updated to {new_ver}! Open a new terminal window to use it.")
+        else:
+            error = ""
             if proc.stderr:
                 lines = [l for l in proc.stderr.strip().splitlines() if l.strip()]
-                error_msg = "\n".join(lines[-3:])
-            return (False, f"Update failed:\n{error_msg or 'unknown error'}")
-
-        return (False, "Update failed. Try manually:\n  curl -fsSL https://raw.githubusercontent.com/rockgod407/BTW-NTS/main/install.sh | bash")
+                error = "\n".join(lines[-5:])
+            return (False, f"Install script failed:\n{error or 'unknown error'}")
 
     except urllib.error.URLError as e:
-        return (False, f"Download failed (network error): {e}")
+        return (False, f"Could not download installer: {e}\n\nTry manually:\n  curl -fsSL {INSTALL_SCRIPT_URL} | bash")
     except subprocess.TimeoutExpired:
-        return (False, "Update timed out. Try manually:\n  curl -fsSL https://raw.githubusercontent.com/rockgod407/BTW-NTS/main/install.sh | bash")
+        return (False, f"Install timed out. Try manually:\n  curl -fsSL {INSTALL_SCRIPT_URL} | bash")
     except Exception as e:
-        return (False, f"Update error: {e}")
+        return (False, f"Update error: {e}\n\nTry manually:\n  curl -fsSL {INSTALL_SCRIPT_URL} | bash")
     finally:
-        if tmp_dir and os.path.exists(tmp_dir):
+        if tmp_dir:
             try:
+                import shutil
                 shutil.rmtree(tmp_dir)
             except Exception:
                 pass
 
 
 def clear_cache():
-    """Legacy — no-op. Kept for API compatibility."""
-    try:
-        if _OLD_CACHE.exists():
-            _OLD_CACHE.unlink()
-    except Exception:
-        pass
+    """Legacy no-op."""
+    pass

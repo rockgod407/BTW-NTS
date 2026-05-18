@@ -178,6 +178,10 @@ def _maybe_update_check():
         if not update_available:
             return
 
+        # Don't nag if we couldn't reach GitHub
+        if remote_ver == "unknown":
+            return
+
         console.print(f"\n[bold yellow]Update available:[/] {local_ver} → [bold green]{remote_ver}[/]")
 
         try:
@@ -187,7 +191,7 @@ def _maybe_update_check():
             return
 
         if response in ("", "y", "yes"):
-            console.print("[dim]Downloading update from GitHub...[/]")
+            console.print("[dim]Running installer from GitHub...[/]")
             success, message = run_update()
             if success:
                 console.print(f"[bold green]{message}[/]\n")
@@ -267,12 +271,12 @@ def update(check_only, force, verbose):
             console.print("[dim]Update cancelled.[/]\n")
             return
 
-    console.print("\n[dim]Downloading zip from GitHub and installing...[/]\n")
+    console.print("\n[dim]Running installer from GitHub...[/]\n")
     success, message = run_update(verbose=verbose)
     if success:
-        console.print(f"[bold green]{message}[/]\n")
+        console.print(f"\n[bold green]{message}[/]\n")
     else:
-        console.print(f"[bold red]{message}[/]\n")
+        console.print(f"\n[bold red]{message}[/]\n")
 
 
 # ---------------------------------------------------------------------------
