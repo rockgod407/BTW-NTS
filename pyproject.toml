@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "nettest"
+version = "0.1.0"
+description = "Comprehensive network test suite for connectivity, performance, and security testing"
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.1",
+    "requests>=2.31",
+    "dnspython>=2.4",
+    "ntplib>=0.4",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "pytest>=7.4",
+    "scapy>=2.5",
+]
+
+[project.scripts]
+nettest = "nettest.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nettest*"]
+
+[tool.pytest.ini_options]
+testpaths = ["nettest/tests"]
+markers = [
+    "http: HTTP/HTTPS protocol tests",
+    "tcp: TCP protocol tests",
+    "udp: UDP protocol tests",
+    "icmp: ICMP protocol tests",
+    "dns: DNS protocol tests",
+    "ntp: NTP protocol tests",
+    "security: Security and compliance tests",
+    "performance: Performance and load tests",
+]

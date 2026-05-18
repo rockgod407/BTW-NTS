@@ -1,0 +1,155 @@
+# =============================================================================
+# nettest configuration file
+# Copy to config.yaml and customize for your environment
+# =============================================================================
+
+targets:
+  # HTTP/HTTPS targets
+  http:
+    - url: "https://httpbin.org/get"
+      expected_status: 200
+      timeout: 10
+    - url: "https://example.com"
+      expected_status: 200
+      timeout: 5
+    - url: "http://httpbin.org/status/301"
+      expected_status: 301
+      follow_redirects: false
+
+  # TCP targets (host:port)
+  tcp:
+    - host: "example.com"
+      ports: [80, 443]
+      timeout: 5
+    - host: "dns.google"
+      ports: [53, 443]
+      timeout: 5
+
+  # UDP targets
+  udp:
+    - host: "dns.google"
+      port: 53
+      timeout: 5
+
+  # ICMP targets (ping/traceroute)
+  icmp:
+    - host: "8.8.8.8"
+      count: 5
+    - host: "1.1.1.1"
+      count: 5
+    - host: "example.com"
+      count: 3
+
+  # DNS targets
+  dns:
+    - domain: "example.com"
+      record_types: ["A", "AAAA", "MX", "TXT"]
+      nameserver: "8.8.8.8"
+    - domain: "google.com"
+      record_types: ["A", "MX", "CNAME", "NS"]
+      nameserver: "1.1.1.1"
+
+  # NTP targets
+  ntp:
+    - server: "pool.ntp.org"
+      max_offset: 1.0
+    - server: "time.google.com"
+      max_offset: 1.0
+
+# Performance test settings
+performance:
+  concurrent_connections: 10
+  duration_seconds: 10
+  requests_per_test: 50
+
+# Security test settings
+security:
+  min_tls_version: "TLSv1.2"
+  check_certificate_expiry_days: 30
+  forbidden_ciphers:
+    - "RC4"
+    - "DES"
+    - "MD5"
+
+
+# =============================================================================
+# AV Protocol Settings
+# =============================================================================
+
+av:
+  # --- NDI ---
+  ndi:
+    # Long-form stream tests: connect to a live source and monitor
+    streams:
+      - source: "OBS (OBS)"           # NDI source name or substring
+        preset: "1080p30"              # Preset for expected resolution/fps
+        duration: "10m"                # How long to monitor
+        max_drop_rate: 0.1             # Max acceptable drop rate (%)
+
+      - source: "PTZ Camera 1"
+        preset: "1080p60"
+        duration: "1h"
+        max_drop_rate: 0.05
+
+    # Generator tests: emit NDI test patterns to stress the network
+    generators:
+      - preset: "1080p60"
+        source_name: "NetTest 1080p60"
+        duration: "5m"
+
+    # Multi-stream stress tests
+    stress_profile: "medium"           # See: nettest presets --protocol ndi
+    stress_duration: "5m"
+
+  # --- sACN / E1.31 ---
+  sacn:
+    # Monitor these universes for incoming data
+    monitor_universes: [1, 2, 3, 4]
+    monitor_duration: "10m"
+    max_drop_rate: 0.1
+
+    # Generate sACN data to stress the network
+    generator:
+      preset: "concert"               # See: nettest presets --protocol sacn
+      duration: "5m"
+      pattern: "chase"                 # chase, full, random, ramp
+
+  # --- Dante ---
+  dante:
+    discovery_timeout: 5               # Seconds to scan for devices
+    ptp_monitor_duration: 30           # Seconds to monitor PTP sync
+
+    # Bandwidth stress test (simulates Dante traffic load)
+    bandwidth_test:
+      preset: "concert-foh"           # See: nettest presets --protocol dante
+      duration: "5m"
+
+  # --- TCNet ---
+  tcnet:
+    discovery_timeout: 5
+    monitor_duration: "5m"
+
+  # --- Pro DJ Link ---
+  prodjlink:
+    discovery_timeout: 10              # CDJs broadcast every ~1.5s
+    beat_sync_duration: 30             # Monitor beat packet timing
+
+  # --- Art-Net / MA-Net ---
+  artnet:
+    discovery_timeout: 5
+    dmx_monitor:
+      universe: 0                      # Art-Net universe to monitor
+      duration: 30                     # Seconds
+
+
+# =============================================================================
+# Report Settings
+# =============================================================================
+
+report:
+  # Auto-export after every run (set to null to disable)
+  auto_export: null                    # "nettest-report.json", ".html", ".csv"
+  # Include full details in report (can be large for long-form tests)
+  include_details: true
+  # Include periodic snapshots from long-form tests
+  include_snapshots: true
